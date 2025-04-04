@@ -1,9 +1,10 @@
 
 import React from "react";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-interface MediButtonProps extends React.ComponentProps<typeof Button> {
+// Use Omit to exclude the 'size' property from ButtonProps
+interface MediButtonProps extends Omit<ButtonProps, 'size'> {
   size?: "sm" | "default" | "lg" | "xl";
   pill?: boolean;
   neumorphic?: boolean;

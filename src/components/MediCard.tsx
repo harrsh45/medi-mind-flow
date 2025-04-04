@@ -3,7 +3,8 @@ import React from "react";
 import { Card, CardContent, CardHeader, CardFooter } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-interface MediCardProps extends React.HTMLAttributes<HTMLDivElement> {
+// Use Omit to exclude the 'title' property from HTMLAttributes
+interface MediCardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
   title?: React.ReactNode;
   footer?: React.ReactNode;
   gradient?: boolean;
