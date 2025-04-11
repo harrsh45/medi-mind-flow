@@ -425,7 +425,7 @@ const Reminders = () => {
       
       timeoutRefs.current.push(testTimeout);
     } catch (error) {
-      console.error("Failed to save reminder:", error);
+      // console.error("Failed to save reminder:", error);
       toast({
         title: "Error",
         description: "Failed to save your reminder",

@@ -1,7 +1,7 @@
 // API service for communicating with the backend
 
 // Base API URL - change this to match your backend URL
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'http://172.25.160.1:5000/api';
 
 // Helper function for API requests with better error handling
 async function apiRequest(endpoint: string, method: string = 'GET', data: any = null) {
@@ -99,4 +99,39 @@ export const reminderApi = {
   // Function to save WhatsApp notification preference
   enableWhatsApp: (id: string, phoneNumber: string, enabled: boolean) => 
     apiRequest(`/reminders/${id}/whatsapp`, 'PATCH', { phoneNumber, enabled }),
+};
+
+// Event API calls
+export const eventApi = {
+  // Get all events
+  getAllEvents: () => 
+    apiRequest('/events'),
+    
+  // Get upcoming events (future dates)
+  getUpcomingEvents: () => 
+    apiRequest('/events/upcoming'),
+    
+  // Get past events (history)
+  getPastEvents: () => 
+    apiRequest('/events/past'),
+    
+  // Get a single event by ID
+  getEvent: (id: string) => 
+    apiRequest(`/events/${id}`),
+    
+  // Create a new event
+  createEvent: (eventData: any) => 
+    apiRequest('/events', 'POST', eventData),
+    
+  // Update an existing event
+  updateEvent: (id: string, eventData: any) => 
+    apiRequest(`/events/${id}`, 'PUT', eventData),
+    
+  // Delete an event
+  deleteEvent: (id: string) => 
+    apiRequest(`/events/${id}`, 'DELETE'),
+    
+  // Mark an event as completed
+  markEventCompleted: (id: string, completed: boolean) => 
+    apiRequest(`/events/${id}/complete`, 'PATCH', { completed }),
 }; 

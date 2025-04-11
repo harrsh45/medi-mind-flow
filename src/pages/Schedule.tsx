@@ -13,7 +13,10 @@ import {
   Trash2, 
   CalendarClock,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  History,
+  CheckCircle2,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MediButton from "@/components/MediButton";
@@ -29,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { 
   AlertDialog,
@@ -41,6 +45,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { format, addDays, isSameDay, isAfter, isBefore, parseISO } from "date-fns";
+import { eventApi } from "@/lib/api";
 
 // Event types for selection
 const eventTypes = [
@@ -50,8 +55,22 @@ const eventTypes = [
   { id: "report", name: "Report Collection", icon: FileText }
 ];
 
-// Initial events data
-const initialEvents = [
+// Define interface for event
+interface Event {
+  id: number;
+  _id?: string; // MongoDB ID
+  title: string;
+  type: string;
+  date: string;
+  time: string;
+  location: string;
+  description: string;
+  reminderEnabled: boolean;
+  completed?: boolean;
+}
+
+// Initial events data - will be replaced with data from backend
+const initialEvents: Event[] = [
   {
     id: 1,
     title: "Annual Physical Exam",
@@ -92,6 +111,9 @@ const Schedule = () => {
   const [eventToDelete, setEventToDelete] = useState<number | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("week");
+  const [activeTab, setActiveTab] = useState<"upcoming" | "history">("upcoming");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // New event form state
   const [newEvent, setNewEvent] = useState({
@@ -120,8 +142,52 @@ const Schedule = () => {
     setNewEvent(prev => ({ ...prev, [name]: checked }));
   };
 
+  // Load events from backend
+  useEffect(() => {
+    const loadEvents = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Load upcoming events
+        const upcomingEvents = await eventApi.getUpcomingEvents();
+        console.log('Upcoming events:', upcomingEvents);
+        
+        // Transform backend data to match frontend format
+        const transformedUpcoming = upcomingEvents.map((item: any, index: number) => ({
+          id: index + 1,
+          _id: item._id,
+          title: item.title,
+          type: item.type,
+          date: format(new Date(item.date), 'yyyy-MM-dd'),
+          time: item.time,
+          location: item.location || "",
+          description: item.description || "",
+          reminderEnabled: item.reminderEnabled,
+          completed: item.completed || false
+        }));
+        
+        setEvents(transformedUpcoming.length ? transformedUpcoming : initialEvents);
+        
+      } catch (error) {
+        console.error("Failed to load events:", error);
+        // If backend fails, use initial data for development
+        setEvents(initialEvents);
+        
+        toast({
+          title: "Error",
+          description: "Failed to load your medical events",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadEvents();
+  }, [toast]);
+
   // Add new event
-  const handleSaveEvent = () => {
+  const handleSaveEvent = async () => {
     if (!newEvent.title.trim()) {
       toast({
         title: "Error",
@@ -140,43 +206,87 @@ const Schedule = () => {
       return;
     }
 
-    const newEventObj = {
-      id: events.length + 1,
-      ...newEvent
-    };
+    setIsSubmitting(true);
 
-    setEvents(prev => [...prev, newEventObj]);
-    setShowAddEvent(false);
-    setNewEvent({
-      title: "",
-      type: "appointment",
-      date: format(new Date(), "yyyy-MM-dd"),
-      time: "09:00",
-      location: "",
-      description: "",
-      reminderEnabled: true
-    });
+    try {
+      // Use the correct createEvent method from eventApi
+      const savedEvent = await eventApi.createEvent(newEvent);
+      
+      // Add to local state
+      const newEventObj = {
+        id: events.length + 1,
+        _id: savedEvent._id,
+        title: newEvent.title,
+        type: newEvent.type,
+        date: newEvent.date,
+        time: newEvent.time,
+        location: newEvent.location,
+        description: newEvent.description,
+        reminderEnabled: newEvent.reminderEnabled,
+        completed: false
+      };
 
-    toast({
-      title: "Success",
-      description: "Medical event added to your schedule",
-      className: "bg-medical-teal text-white",
-    });
+      setEvents(prev => [...prev, newEventObj]);
+      setShowAddEvent(false);
+      setNewEvent({
+        title: "",
+        type: "appointment",
+        date: format(new Date(), "yyyy-MM-dd"),
+        time: "09:00",
+        location: "",
+        description: "",
+        reminderEnabled: true
+      });
+
+      toast({
+        title: "Success",
+        description: "Medical event added to your schedule",
+        className: "bg-medical-teal text-white",
+      });
+    } catch (error) {
+      console.error("Failed to save event:", error);
+      toast({
+        title: "Error",
+        description: "Failed to add event to your schedule",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Delete event
-  const handleDeleteEvent = () => {
+  const handleDeleteEvent = async () => {
     if (eventToDelete === null) return;
     
-    const eventName = events.find(e => e.id === eventToDelete)?.title;
+    const event = events.find(e => e.id === eventToDelete);
+    if (!event) return;
     
-    setEvents(prev => prev.filter(event => event.id !== eventToDelete));
-    setEventToDelete(null);
-    
-    toast({
-      description: `"${eventName}" removed from your schedule`,
-      className: "bg-destructive text-destructive-foreground",
-    });
+    setIsSubmitting(true);
+
+    try {
+      // Use the correct deleteEvent method if we have the MongoDB ID
+      if (event._id) {
+        await eventApi.deleteEvent(event._id);
+      }
+      
+      setEvents(prev => prev.filter(event => event.id !== eventToDelete));
+      setEventToDelete(null);
+      
+      toast({
+        description: `"${event.title}" removed from your schedule`,
+        className: "bg-destructive text-destructive-foreground",
+      });
+    } catch (error) {
+      console.error("Failed to delete event:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete event from your schedule",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Toggle reminder status
@@ -193,6 +303,22 @@ const Schedule = () => {
     toast({
       description: `Reminder for "${event?.title}" ${status}`,
       className: status === 'enabled' ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
+    });
+  };
+
+  // Handle marking events as completed
+  const handleMarkEventCompleted = (id: number, completed: boolean) => {
+    setEvents(prev => 
+      prev.map(event => 
+        event.id === id ? { ...event, completed } : event
+      )
+    );
+    
+    const event = events.find(e => e.id === id);
+    
+    toast({
+      description: `"${event?.title}" marked as ${completed ? 'completed' : 'not completed'}`,
+      className: completed ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
     });
   };
 
@@ -249,155 +375,232 @@ const Schedule = () => {
           <span>Back</span>
         </Button>
         <h1 className="text-xl font-bold">Medical Schedule</h1>
-        <Button variant="ghost" onClick={() => setShowAddEvent(true)}>
-          <Plus className="w-5 h-5" />
-        </Button>
+        {activeTab === "upcoming" && (
+          <Button variant="ghost" onClick={() => setShowAddEvent(true)}>
+            <Plus className="w-5 h-5" />
+          </Button>
+        )}
       </header>
       
       <div className="p-4">
-        {/* Date selector and view controls */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-          <div className="flex items-center">
-            <Button 
-              variant="outline" 
-              size="icon"
-              onClick={() => navigateDays(-1)}
-              className="h-10 w-10"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-            
-            <div className="px-4 text-center">
-              <h2 className="text-xl font-semibold">
-                {viewMode === "day" && format(selectedDate, "MMMM d, yyyy")}
-                {viewMode === "week" && `Week of ${format(addDays(selectedDate, -selectedDate.getDay()), "MMM d")}`}
-                {viewMode === "month" && format(selectedDate, "MMMM yyyy")}
-              </h2>
-            </div>
-            
-            <Button 
-              variant="outline" 
-              size="icon"
-              onClick={() => navigateDays(1)}
-              className="h-10 w-10"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </Button>
-          </div>
+        {/* Tabs for Upcoming and History */}
+        <Tabs defaultValue="upcoming" value={activeTab} onValueChange={(value) => setActiveTab(value as "upcoming" | "history")}>
+          <TabsList className="grid grid-cols-2 mb-6">
+            <TabsTrigger value="upcoming" className="text-base py-2">
+              <Calendar className="w-4 h-4 mr-2" />
+              Upcoming
+            </TabsTrigger>
+            <TabsTrigger value="history" className="text-base py-2">
+              <History className="w-4 h-4 mr-2" />
+              History
+            </TabsTrigger>
+          </TabsList>
           
-          <div className="flex gap-2 w-full sm:w-auto">
-            <Button 
-              variant={viewMode === "day" ? "default" : "outline"}
-              className={`flex-1 sm:flex-initial ${viewMode === "day" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
-              onClick={() => setViewMode("day")}
-            >
-              Day
-            </Button>
-            <Button 
-              variant={viewMode === "week" ? "default" : "outline"}
-              className={`flex-1 sm:flex-initial ${viewMode === "week" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
-              onClick={() => setViewMode("week")}
-            >
-              Week
-            </Button>
-            <Button 
-              variant={viewMode === "month" ? "default" : "outline"}
-              className={`flex-1 sm:flex-initial ${viewMode === "month" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
-              onClick={() => setViewMode("month")}
-            >
-              Month
-            </Button>
-          </div>
-        </div>
+          <TabsContent value="upcoming">
+            {/* Date selector and view controls */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+              <div className="flex items-center">
+                <Button 
+                  variant="outline" 
+                  size="icon"
+                  onClick={() => navigateDays(-1)}
+                  className="h-10 w-10"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                
+                <div className="px-4 text-center">
+                  <h2 className="text-xl font-semibold">
+                    {viewMode === "day" && format(selectedDate, "MMMM d, yyyy")}
+                    {viewMode === "week" && `Week of ${format(addDays(selectedDate, -selectedDate.getDay()), "MMM d")}`}
+                    {viewMode === "month" && format(selectedDate, "MMMM yyyy")}
+                  </h2>
+                </div>
+                
+                <Button 
+                  variant="outline" 
+                  size="icon"
+                  onClick={() => navigateDays(1)}
+                  className="h-10 w-10"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+              
+              <div className="flex gap-2 w-full sm:w-auto">
+                <Button 
+                  variant={viewMode === "day" ? "default" : "outline"}
+                  className={`flex-1 sm:flex-initial ${viewMode === "day" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
+                  onClick={() => setViewMode("day")}
+                >
+                  Day
+                </Button>
+                <Button 
+                  variant={viewMode === "week" ? "default" : "outline"}
+                  className={`flex-1 sm:flex-initial ${viewMode === "week" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
+                  onClick={() => setViewMode("week")}
+                >
+                  Week
+                </Button>
+                <Button 
+                  variant={viewMode === "month" ? "default" : "outline"}
+                  className={`flex-1 sm:flex-initial ${viewMode === "month" ? "bg-medical-teal hover:bg-medical-teal/90" : ""}`}
+                  onClick={() => setViewMode("month")}
+                >
+                  Month
+                </Button>
+              </div>
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="history">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold mb-2">Past Medical Events</h2>
+              <p className="text-muted-foreground">
+                Review your completed medical appointments and events.
+              </p>
+            </div>
+          </TabsContent>
+        </Tabs>
         
         {/* Events list */}
-        <div className="space-y-6">
-          {filteredEvents.length > 0 ? (
-            filteredEvents.map((event, index) => (
-              <GsapReveal key={event.id} animation="slide" delay={0.1 * index}>
-                <MediCard neumorphic className="p-5">
-                  <div className="flex flex-col md:flex-row justify-between gap-4">
-                    <div className="flex items-start">
-                      <div className="w-14 h-14 rounded-full bg-medical-teal/20 flex items-center justify-center mr-4 flex-shrink-0">
-                        {getEventIcon(event.type)}
-                      </div>
-                      
-                      <div>
-                        <h3 className="text-xl font-semibold mb-1">{event.title}</h3>
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <Loader2 className="w-12 h-12 text-medical-teal animate-spin mb-4" />
+            <p className="text-lg text-muted-foreground">Loading your medical events...</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {filteredEvents.length > 0 ? (
+              filteredEvents.map((event, index) => (
+                <GsapReveal key={event.id} animation="slide" delay={0.1 * index}>
+                  <MediCard neumorphic className="p-5">
+                    <div className="flex flex-col md:flex-row justify-between gap-4">
+                      <div className="flex items-start">
+                        <div className="w-14 h-14 rounded-full bg-medical-teal/20 flex items-center justify-center mr-4 flex-shrink-0">
+                          {getEventIcon(event.type)}
+                        </div>
                         
-                        <div className="space-y-1 text-base">
-                          <div className="flex items-center text-muted-foreground">
-                            <Calendar className="w-4 h-4 mr-2" />
-                            <span>{format(parseISO(event.date), "EEEE, MMMM d, yyyy")}</span>
+                        <div>
+                          <div className="flex items-center mb-1">
+                            <h3 className="text-xl font-semibold mr-2">{event.title}</h3>
+                            {event.completed && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-medical-teal/20 text-medical-teal">
+                                <CheckCircle2 className="w-3 h-3 mr-1" />
+                                Completed
+                              </span>
+                            )}
                           </div>
                           
-                          <div className="flex items-center text-muted-foreground">
-                            <Clock className="w-4 h-4 mr-2" />
-                            <span>{event.time}</span>
-                          </div>
-                          
-                          {event.location && (
+                          <div className="space-y-1 text-base">
                             <div className="flex items-center text-muted-foreground">
-                              <MapPin className="w-4 h-4 mr-2" />
-                              <span>{event.location}</span>
+                              <Calendar className="w-4 h-4 mr-2" />
+                              <span>{format(parseISO(event.date), "EEEE, MMMM d, yyyy")}</span>
                             </div>
-                          )}
-                          
-                          {event.description && (
-                            <div className="mt-2 text-sm">
-                              {event.description}
+                            
+                            <div className="flex items-center text-muted-foreground">
+                              <Clock className="w-4 h-4 mr-2" />
+                              <span>{event.time}</span>
                             </div>
-                          )}
+                            
+                            {event.location && (
+                              <div className="flex items-center text-muted-foreground">
+                                <MapPin className="w-4 h-4 mr-2" />
+                                <span>{event.location}</span>
+                              </div>
+                            )}
+                            
+                            {event.description && (
+                              <div className="mt-2 text-sm">
+                                {event.description}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    
-                    <div className="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 mt-2 md:mt-0 pt-3 md:pt-0 border-t md:border-0">
-                      <div className="flex items-center">
-                        <span className="mr-2 text-sm font-medium text-muted-foreground">
-                          Reminder
-                        </span>
-                        <Switch 
-                          checked={event.reminderEnabled} 
-                          onCheckedChange={() => toggleReminderStatus(event.id)}
-                          className="scale-125 data-[state=checked]:bg-medical-teal"
-                        />
-                      </div>
                       
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10 px-3 border-destructive text-destructive hover:bg-destructive/10"
-                        onClick={() => setEventToDelete(event.id)}
-                      >
-                        <Trash2 className="h-5 w-5 mr-1" />
-                        <span>Delete</span>
-                      </Button>
+                      <div className="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 mt-2 md:mt-0 pt-3 md:pt-0 border-t md:border-0">
+                        {activeTab === "upcoming" ? (
+                          <>
+                            <div className="flex items-center">
+                              <span className="mr-2 text-sm font-medium text-muted-foreground">
+                                Reminder
+                              </span>
+                              <Switch 
+                                checked={event.reminderEnabled} 
+                                onCheckedChange={() => toggleReminderStatus(event.id)}
+                                className="scale-125 data-[state=checked]:bg-medical-teal"
+                              />
+                            </div>
+                            
+                            <div className="flex items-center">
+                              <span className="mr-2 text-sm font-medium text-muted-foreground">
+                                Completed
+                              </span>
+                              <Switch 
+                                checked={event.completed || false} 
+                                onCheckedChange={(checked) => handleMarkEventCompleted(event.id, checked)}
+                                className="scale-125 data-[state=checked]:bg-green-500"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center">
+                            <span className="mr-2 text-sm font-medium text-muted-foreground">
+                              Status
+                            </span>
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              event.completed 
+                                ? "bg-green-100 text-green-700" 
+                                : "bg-yellow-100 text-yellow-700"
+                            }`}>
+                              {event.completed ? "Completed" : "Missed"}
+                            </span>
+                          </div>
+                        )}
+                        
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-10 px-3 border-destructive text-destructive hover:bg-destructive/10"
+                          onClick={() => setEventToDelete(event.id)}
+                        >
+                          <Trash2 className="h-5 w-5 mr-1" />
+                          <span>Delete</span>
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </MediCard>
-              </GsapReveal>
-            ))
-          ) : (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
-                <CalendarClock className="w-10 h-10 text-muted-foreground" />
+                  </MediCard>
+                </GsapReveal>
+              ))
+            ) : (
+              <div className="text-center py-12">
+                <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                  <CalendarClock className="w-10 h-10 text-muted-foreground" />
+                </div>
+                <h3 className="font-medium text-xl mb-2">
+                  {activeTab === "upcoming" 
+                    ? "No upcoming events scheduled" 
+                    : "No past events found"}
+                </h3>
+                <p className="text-muted-foreground text-lg max-w-md mx-auto">
+                  {activeTab === "upcoming" 
+                    ? "You don't have any medical events scheduled for this time period. Click the + button to add a new event." 
+                    : "Your past medical appointments and events will appear here once completed."}
+                </p>
+                {activeTab === "upcoming" && (
+                  <Button 
+                    className="mt-6 bg-medical-teal hover:bg-medical-teal/90 text-lg h-12 px-6"
+                    onClick={() => setShowAddEvent(true)}
+                  >
+                    <Plus className="w-5 h-5 mr-2" />
+                    Add Medical Event
+                  </Button>
+                )}
               </div>
-              <h3 className="font-medium text-xl mb-2">No events scheduled</h3>
-              <p className="text-muted-foreground text-lg max-w-md mx-auto">
-                You don't have any medical events scheduled for this time period.
-                Click the + button to add a new event.
-              </p>
-              <Button 
-                className="mt-6 bg-medical-teal hover:bg-medical-teal/90 text-lg h-12 px-6"
-                onClick={() => setShowAddEvent(true)}
-              >
-                <Plus className="w-5 h-5 mr-2" />
-                Add Medical Event
-              </Button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
       
       {/* Add Event Modal */}
@@ -532,9 +735,19 @@ const Schedule = () => {
                 <MediButton 
                   className="bg-medical-teal hover:bg-medical-teal/90 text-base h-12 px-6"
                   onClick={handleSaveEvent}
+                  disabled={isSubmitting}
                 >
-                  <CheckCircle className="w-5 h-5 mr-2" />
-                  Save Event
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5 mr-2" />
+                      Save Event
+                    </>
+                  )}
                 </MediButton>
               </div>
             </MediCard>
@@ -557,8 +770,16 @@ const Schedule = () => {
             <AlertDialogAction 
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={handleDeleteEvent}
+              disabled={isSubmitting}
             >
-              Delete
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
