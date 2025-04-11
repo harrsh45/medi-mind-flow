@@ -1,7 +1,6 @@
-
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X } from "lucide-react";
+import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MediButton from "@/components/MediButton";
 import MediCard from "@/components/MediCard";
@@ -9,9 +8,20 @@ import GsapReveal from "@/components/GsapReveal";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/components/ui/use-toast";
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-// Mock data
-const reminders = [
+// Move the mock data outside as initial data
+const initialReminders = [
   {
     id: 1,
     medicationName: "Lisinopril",
@@ -46,11 +56,14 @@ const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const Reminders = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("all");
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [newMedicine, setNewMedicine] = useState("");
   const [newTime, setNewTime] = useState("08:00");
   const [selectedDays, setSelectedDays] = useState<string[]>(["Mon", "Wed", "Fri"]);
+  const [reminders, setReminders] = useState(initialReminders);
+  const [reminderToDelete, setReminderToDelete] = useState<number | null>(null);
 
   const toggleDay = (day: string) => {
     if (selectedDays.includes(day)) {
@@ -71,6 +84,90 @@ const Reminders = () => {
     return true;
   });
   
+  const handleSaveReminder = () => {
+    if (!newMedicine.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a medication name",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedDays.length === 0) {
+      toast({
+        title: "Error",
+        description: "Please select at least one day",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Convert 24h time to 12h format
+    const formatTime = (time: string) => {
+      const [hours, minutes] = time.split(':');
+      const hour = parseInt(hours);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const hour12 = hour % 12 || 12;
+      return `${hour12}:${minutes} ${ampm}`;
+    };
+
+    const newReminder = {
+      id: reminders.length + 1,
+      medicationName: newMedicine,
+      time: formatTime(newTime),
+      days: selectedDays,
+      enabled: true,
+    };
+
+    setReminders(prev => [...prev, newReminder]);
+    
+    // Reset form
+    setNewMedicine("");
+    setNewTime("08:00");
+    setSelectedDays(["Mon", "Wed", "Fri"]);
+    setShowAddReminder(false);
+
+    toast({
+      title: "Success",
+      description: "Reminder added successfully",
+      className: "bg-medical-teal text-white",
+    });
+  };
+
+  // Add function to handle toggle reminder enabled status
+  const toggleReminderStatus = (id: number) => {
+    setReminders(prev => 
+      prev.map(reminder => 
+        reminder.id === id ? { ...reminder, enabled: !reminder.enabled } : reminder
+      )
+    );
+    
+    // Get the reminder that was toggled
+    const reminder = reminders.find(r => r.id === id);
+    const status = reminder?.enabled ? 'disabled' : 'enabled';
+    
+    toast({
+      description: `Reminder for ${reminder?.medicationName} ${status}`,
+      className: status === 'enabled' ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
+    });
+  };
+  
+  // Add function to handle reminder deletion
+  const handleDeleteReminder = () => {
+    if (reminderToDelete === null) return;
+    
+    const reminderName = reminders.find(r => r.id === reminderToDelete)?.medicationName;
+    
+    setReminders(prev => prev.filter(reminder => reminder.id !== reminderToDelete));
+    setReminderToDelete(null);
+    
+    toast({
+      description: `Reminder for ${reminderName} deleted`,
+      className: "bg-destructive text-destructive-foreground",
+    });
+  };
+
   return (
     <div className="min-h-screen pb-6">
       <header className="flex justify-between items-center p-4 border-b">
@@ -93,26 +190,52 @@ const Reminders = () => {
             <TabsTrigger value="evening">Evening</TabsTrigger>
           </TabsList>
           
-          <TabsContent value={activeTab} className="space-y-4">
+          <TabsContent value={activeTab} className="space-y-6">
             {filteredReminders.map((reminder, index) => (
               <GsapReveal key={reminder.id} animation="slide" delay={0.1 * index}>
-                <MediCard neumorphic>
-                  <div className="flex items-center justify-between">
+                <MediCard neumorphic className="p-5">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex items-center">
-                      <div className="w-10 h-10 rounded-full bg-medical-teal/10 flex items-center justify-center mr-3">
-                        <AlarmClock className="w-5 h-5 text-medical-teal" />
+                      <div className="w-14 h-14 rounded-full bg-medical-teal/20 flex items-center justify-center mr-4">
+                        <AlarmClock className="w-7 h-7 text-medical-teal" />
                       </div>
                       <div>
-                        <h3 className="font-medium">{reminder.medicationName}</h3>
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <Clock className="w-3 h-3 mr-1" />
-                          <span>{reminder.time}</span>
-                          <span className="mx-1">•</span>
-                          <span>{reminder.days.length === 7 ? "Daily" : reminder.days.join(", ")}</span>
+                        <h3 className="text-xl font-semibold mb-1">{reminder.medicationName}</h3>
+                        <div className="flex flex-wrap items-center text-base text-muted-foreground">
+                          <div className="flex items-center mr-3">
+                            <Clock className="w-4 h-4 mr-2" />
+                            <span className="font-medium">{reminder.time}</span>
+                          </div>
+                          <span className="mx-1 hidden md:inline">•</span>
+                          <div className="mt-1 md:mt-0">
+                            <span>{reminder.days.length === 7 ? "Every day" : reminder.days.join(", ")}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
-                    <Switch checked={reminder.enabled} />
+                    
+                    <div className="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 mt-3 md:mt-0 pt-3 md:pt-0 border-t md:border-0">
+                      <div className="flex items-center">
+                        <span className="mr-2 text-sm font-medium text-muted-foreground">
+                          {reminder.enabled ? "Active" : "Inactive"}
+                        </span>
+                        <Switch 
+                          checked={reminder.enabled} 
+                          onCheckedChange={() => toggleReminderStatus(reminder.id)}
+                          className="scale-125 data-[state=checked]:bg-medical-teal"
+                        />
+                      </div>
+                      
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 px-3 border-destructive text-destructive hover:bg-destructive/10"
+                        onClick={() => setReminderToDelete(reminder.id)}
+                      >
+                        <Trash2 className="h-5 w-5 mr-1" />
+                        <span>Delete</span>
+                      </Button>
+                    </div>
                   </div>
                 </MediCard>
               </GsapReveal>
@@ -231,7 +354,7 @@ const Reminders = () => {
                   </Button>
                   <MediButton 
                     className="flex-1 bg-medical-teal hover:bg-medical-teal/90"
-                    onClick={() => setShowAddReminder(false)}
+                    onClick={handleSaveReminder}
                   >
                     <CheckCircle className="w-4 h-4 mr-2" />
                     Save Reminder
@@ -242,6 +365,28 @@ const Reminders = () => {
           </GsapReveal>
         </div>
       )}
+      
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={reminderToDelete !== null} onOpenChange={() => setReminderToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Reminder</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this reminder?
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDeleteReminder}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
