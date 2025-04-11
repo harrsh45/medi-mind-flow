@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X, Trash2 } from "lucide-react";
+import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X, Trash2, PillIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MediButton from "@/components/MediButton";
 import MediCard from "@/components/MediCard";
@@ -19,6 +19,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { format, parse, isAfter, isBefore, addMinutes, compareAsc } from "date-fns";
 
 // Move the mock data outside as initial data
 const initialReminders = [
@@ -54,6 +55,92 @@ const initialReminders = [
 
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+// Map weekday abbreviations to full names for date-fns
+const weekdayMap: Record<string, number> = {
+  "Mon": 1,
+  "Tue": 2,
+  "Wed": 3,
+  "Thu": 4,
+  "Fri": 5,
+  "Sat": 6,
+  "Sun": 0,
+};
+
+// Notification component that appears when it's time to take medicine
+const MedicationAlert = ({ 
+  reminder, 
+  onTake, 
+  onSnooze, 
+  onDismiss 
+}: { 
+  reminder: any, 
+  onTake: () => void, 
+  onSnooze: () => void, 
+  onDismiss: () => void 
+}) => {
+  // Play sound when alert appears
+  useEffect(() => {
+    // Create audio element
+    const audio = new Audio("/notification-sound.mp3");
+    audio.volume = 0.7;
+    
+    // Try to play - browsers might block this without user interaction
+    const playPromise = audio.play();
+    
+    if (playPromise !== undefined) {
+      playPromise.catch(error => {
+        console.log("Auto-play was prevented:", error);
+      });
+    }
+    
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+    };
+  }, []);
+  
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-in fade-in">
+      <MediCard className="w-full max-w-md p-6 shadow-xl animate-in slide-in-from-bottom-10">
+        <div className="flex flex-col items-center text-center mb-6">
+          <div className="w-20 h-20 rounded-full bg-medical-teal/20 flex items-center justify-center mb-4">
+            <PillIcon className="w-10 h-10 text-medical-teal" />
+          </div>
+          <h2 className="text-2xl font-bold mb-1">Medication Reminder</h2>
+          <p className="text-xl font-semibold text-medical-teal mb-1">{reminder.medicationName}</p>
+          <p className="text-lg text-muted-foreground">It's time to take your medication</p>
+        </div>
+        
+        <div className="flex flex-col gap-3">
+          <MediButton 
+            className="w-full h-14 text-lg bg-medical-teal hover:bg-medical-teal/90"
+            onClick={onTake}
+          >
+            <CheckCircle className="w-6 h-6 mr-2" />
+            Take Now
+          </MediButton>
+          
+          <Button 
+            variant="outline"
+            className="w-full h-12 text-base"
+            onClick={onSnooze}
+          >
+            Remind Me in 15 Minutes
+          </Button>
+          
+          <Button 
+            variant="ghost"
+            className="w-full h-12 text-base"
+            onClick={onDismiss}
+          >
+            Dismiss
+          </Button>
+        </div>
+      </MediCard>
+    </div>
+  );
+};
+
 const Reminders = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -64,6 +151,128 @@ const Reminders = () => {
   const [selectedDays, setSelectedDays] = useState<string[]>(["Mon", "Wed", "Fri"]);
   const [reminders, setReminders] = useState(initialReminders);
   const [reminderToDelete, setReminderToDelete] = useState<number | null>(null);
+  const [activeAlert, setActiveAlert] = useState<any | null>(null);
+  const [snoozedReminders, setSnoozedReminders] = useState<any[]>([]);
+  
+  // Reference to store timeout IDs so they can be cleared
+  const timeoutRefs = useRef<NodeJS.Timeout[]>([]);
+  
+  // Clear all timeouts when component unmounts
+  useEffect(() => {
+    return () => {
+      timeoutRefs.current.forEach(timeoutId => clearTimeout(timeoutId));
+    };
+  }, []);
+  
+  // Schedule all active reminders
+  useEffect(() => {
+    // Clear previous timeouts
+    timeoutRefs.current.forEach(timeoutId => clearTimeout(timeoutId));
+    timeoutRefs.current = [];
+    
+    // Schedule enabled reminders
+    const enabledReminders = reminders.filter(r => r.enabled);
+    
+    enabledReminders.forEach(reminder => {
+      const today = new Date();
+      const dayOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][today.getDay()];
+      
+      // Check if reminder is scheduled for today
+      if (reminder.days.includes(dayOfWeek)) {
+        // Parse reminder time
+        const [timeString, period] = reminder.time.split(' ');
+        const [hours, minutes] = timeString.split(':').map(num => parseInt(num));
+        
+        // Convert to 24-hour format
+        let hour24 = hours;
+        if (period === 'PM' && hours < 12) hour24 += 12;
+        if (period === 'AM' && hours === 12) hour24 = 0;
+        
+        // Create reminder date for today
+        const reminderTime = new Date();
+        reminderTime.setHours(hour24, minutes, 0, 0);
+        
+        // If reminder time is in the future for today, schedule it
+        if (isAfter(reminderTime, today)) {
+          const timeoutId = setTimeout(() => {
+            // Show notification
+            setActiveAlert(reminder);
+            
+            // Vibrate device if supported
+            if (navigator.vibrate) {
+              navigator.vibrate([200, 100, 200]);
+            }
+          }, reminderTime.getTime() - today.getTime());
+          
+          timeoutRefs.current.push(timeoutId);
+        }
+      }
+    });
+    
+    // Also check snoozed reminders
+    snoozedReminders.forEach(snoozed => {
+      if (isAfter(snoozed.time, new Date())) {
+        const timeoutId = setTimeout(() => {
+          setActiveAlert(snoozed.reminder);
+          
+          // Remove from snoozed list
+          setSnoozedReminders(prev => 
+            prev.filter(s => s.reminder.id !== snoozed.reminder.id)
+          );
+          
+          // Vibrate device if supported
+          if (navigator.vibrate) {
+            navigator.vibrate([200, 100, 200]);
+          }
+        }, snoozed.time.getTime() - new Date().getTime());
+        
+        timeoutRefs.current.push(timeoutId);
+      }
+    });
+  }, [reminders, snoozedReminders]);
+  
+  const handleTakeMedication = () => {
+    if (!activeAlert) return;
+    
+    toast({
+      title: "Medication Taken",
+      description: `You've marked ${activeAlert.medicationName} as taken.`,
+      className: "bg-medical-teal text-white",
+    });
+    
+    setActiveAlert(null);
+  };
+  
+  const handleSnoozeMedication = () => {
+    if (!activeAlert) return;
+    
+    // Create a time 15 minutes from now
+    const snoozeTime = addMinutes(new Date(), 15);
+    
+    // Add to snoozed reminders
+    setSnoozedReminders(prev => [
+      ...prev, 
+      { reminder: activeAlert, time: snoozeTime }
+    ]);
+    
+    toast({
+      description: `Reminder for ${activeAlert.medicationName} snoozed for 15 minutes.`,
+      className: "bg-slate-700 text-white",
+    });
+    
+    setActiveAlert(null);
+  };
+  
+  const handleDismissMedication = () => {
+    if (!activeAlert) return;
+    
+    toast({
+      description: `Reminder dismissed for ${activeAlert.medicationName}.`,
+      className: "bg-slate-700 text-white",
+    });
+    
+    setActiveAlert(null);
+  };
 
   const toggleDay = (day: string) => {
     if (selectedDays.includes(day)) {
@@ -133,6 +342,17 @@ const Reminders = () => {
       description: "Reminder added successfully",
       className: "bg-medical-teal text-white",
     });
+    
+    // For demo/testing purposes, schedule an immediate alert after 5 seconds
+    const testTimeout = setTimeout(() => {
+      setActiveAlert(newReminder);
+      // Vibrate device if supported
+      if (navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+    }, 5000);
+    
+    timeoutRefs.current.push(testTimeout);
   };
 
   // Add function to handle toggle reminder enabled status
@@ -387,6 +607,16 @@ const Reminders = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      
+      {/* Medication Alert */}
+      {activeAlert && (
+        <MedicationAlert 
+          reminder={activeAlert}
+          onTake={handleTakeMedication}
+          onSnooze={handleSnoozeMedication}
+          onDismiss={handleDismissMedication}
+        />
+      )}
     </div>
   );
 };

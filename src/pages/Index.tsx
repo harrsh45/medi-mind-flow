@@ -18,7 +18,7 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
 
-// Mock data for initial medications
+
 const initialMedications = [
   {
     id: 1,

@@ -8,6 +8,7 @@ import Scanner from "./pages/Scanner";
 import Support from "./pages/Support";
 import Reminders from "./pages/Reminders";
 import Schedule from "./pages/Schedule";
+import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/support" element={<Support />} />
           <Route path="/reminders" element={<Reminders />} />
           <Route path="/schedule" element={<Schedule />} />
+          <Route path="/profile" element={<Profile />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
