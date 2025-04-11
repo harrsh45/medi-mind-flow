@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X, Trash2, PillIcon } from "lucide-react";
+import { ArrowUp, Bell, Plus, Clock, Calendar, AlarmClock, CheckCircle, X, Trash2, PillIcon, PhoneOutgoing } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MediButton from "@/components/MediButton";
 import MediCard from "@/components/MediCard";
@@ -20,6 +20,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { format, parse, isAfter, isBefore, addMinutes, compareAsc } from "date-fns";
+import { reminderApi } from "@/lib/api"; // Import the API service
+
+// Type definitions
+interface Reminder {
+  id: number;
+  medicationName: string;
+  time: string;
+  days: string[];
+  enabled: boolean;
+  whatsappEnabled?: boolean;
+  phoneNumber?: string;
+  _id?: string; // Backend ID
+}
 
 // Move the mock data outside as initial data
 const initialReminders = [
@@ -149,20 +162,53 @@ const Reminders = () => {
   const [newMedicine, setNewMedicine] = useState("");
   const [newTime, setNewTime] = useState("08:00");
   const [selectedDays, setSelectedDays] = useState<string[]>(["Mon", "Wed", "Fri"]);
-  const [reminders, setReminders] = useState(initialReminders);
+  const [reminders, setReminders] = useState<Reminder[]>(initialReminders);
   const [reminderToDelete, setReminderToDelete] = useState<number | null>(null);
   const [activeAlert, setActiveAlert] = useState<any | null>(null);
   const [snoozedReminders, setSnoozedReminders] = useState<any[]>([]);
+  const [phoneNumber, setPhoneNumber] = useState<string>("");
+  const [whatsappEnabled, setWhatsappEnabled] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   
   // Reference to store timeout IDs so they can be cleared
   const timeoutRefs = useRef<NodeJS.Timeout[]>([]);
   
-  // Clear all timeouts when component unmounts
+  // Load reminders from backend
   useEffect(() => {
-    return () => {
-      timeoutRefs.current.forEach(timeoutId => clearTimeout(timeoutId));
+    const loadReminders = async () => {
+      try {
+        setIsLoading(true);
+        const backendReminders = await reminderApi.getAllReminders();
+        
+        if (backendReminders && backendReminders.length > 0) {
+          // Transform backend reminders to frontend format
+          const transformedReminders = backendReminders.map((item: any, index: number) => ({
+            id: index + 1,
+            _id: item._id,
+            medicationName: item.name,
+            time: item.time[0], // Assuming time is array in backend but string in frontend
+            days: item.days || ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            enabled: item.enabled || true,
+            whatsappEnabled: item.whatsappEnabled || false,
+            phoneNumber: item.phoneNumber || "",
+          }));
+          
+          setReminders(transformedReminders);
+        }
+      } catch (error) {
+        console.error("Failed to load reminders:", error);
+        toast({
+          title: "Error",
+          description: "Failed to load your reminders",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
     };
-  }, []);
+    
+    loadReminders();
+  }, [toast]);
   
   // Schedule all active reminders
   useEffect(() => {
@@ -231,7 +277,7 @@ const Reminders = () => {
     });
   }, [reminders, snoozedReminders]);
   
-  const handleTakeMedication = () => {
+  const handleTakeMedication = async () => {
     if (!activeAlert) return;
     
     toast({
@@ -293,7 +339,7 @@ const Reminders = () => {
     return true;
   });
   
-  const handleSaveReminder = () => {
+  const handleSaveReminder = async () => {
     if (!newMedicine.trim()) {
       toast({
         title: "Error",
@@ -321,71 +367,185 @@ const Reminders = () => {
       return `${hour12}:${minutes} ${ampm}`;
     };
 
-    const newReminder = {
-      id: reminders.length + 1,
-      medicationName: newMedicine,
-      time: formatTime(newTime),
-      days: selectedDays,
-      enabled: true,
-    };
+    try {
+      setIsLoading(true);
+      
+      // Prepare data for backend
+      const reminderData = {
+        name: newMedicine,
+        dosage: "1 pill", // Default value, modify as needed
+        time: [formatTime(newTime)], // Backend expects array
+        days: selectedDays,
+        frequency: "daily",
+        startDate: new Date(),
+        notes: "",
+        whatsappEnabled: whatsappEnabled,
+        phoneNumber: phoneNumber || "",
+      };
+      
+      // Save to backend
+      const savedReminder = await reminderApi.createReminder(reminderData);
+      
+      // Add to local state
+      const newReminder = {
+        id: reminders.length + 1,
+        _id: savedReminder._id,
+        medicationName: newMedicine,
+        time: formatTime(newTime),
+        days: selectedDays,
+        enabled: true,
+        whatsappEnabled: whatsappEnabled,
+        phoneNumber: phoneNumber,
+      };
 
-    setReminders(prev => [...prev, newReminder]);
-    
-    // Reset form
-    setNewMedicine("");
-    setNewTime("08:00");
-    setSelectedDays(["Mon", "Wed", "Fri"]);
-    setShowAddReminder(false);
+      setReminders(prev => [...prev, newReminder]);
+      
+      // Reset form
+      setNewMedicine("");
+      setNewTime("08:00");
+      setSelectedDays(["Mon", "Wed", "Fri"]);
+      setPhoneNumber("");
+      setWhatsappEnabled(false);
+      setShowAddReminder(false);
 
-    toast({
-      title: "Success",
-      description: "Reminder added successfully",
-      className: "bg-medical-teal text-white",
-    });
-    
-    // For demo/testing purposes, schedule an immediate alert after 5 seconds
-    const testTimeout = setTimeout(() => {
-      setActiveAlert(newReminder);
-      // Vibrate device if supported
-      if (navigator.vibrate) {
-        navigator.vibrate([200, 100, 200]);
-      }
-    }, 5000);
-    
-    timeoutRefs.current.push(testTimeout);
+      toast({
+        title: "Success",
+        description: "Reminder added successfully" + (whatsappEnabled ? " with WhatsApp notifications" : ""),
+        className: "bg-medical-teal text-white",
+      });
+      
+      // For demo/testing purposes, schedule an immediate alert after 5 seconds
+      const testTimeout = setTimeout(() => {
+        setActiveAlert(newReminder);
+        // Vibrate device if supported
+        if (navigator.vibrate) {
+          navigator.vibrate([200, 100, 200]);
+        }
+      }, 5000);
+      
+      timeoutRefs.current.push(testTimeout);
+    } catch (error) {
+      console.error("Failed to save reminder:", error);
+      toast({
+        title: "Error",
+        description: "Failed to save your reminder",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Add function to handle toggle reminder enabled status
-  const toggleReminderStatus = (id: number) => {
-    setReminders(prev => 
-      prev.map(reminder => 
-        reminder.id === id ? { ...reminder, enabled: !reminder.enabled } : reminder
-      )
-    );
-    
-    // Get the reminder that was toggled
-    const reminder = reminders.find(r => r.id === id);
-    const status = reminder?.enabled ? 'disabled' : 'enabled';
-    
-    toast({
-      description: `Reminder for ${reminder?.medicationName} ${status}`,
-      className: status === 'enabled' ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
-    });
+  const toggleReminderStatus = async (id: number) => {
+    try {
+      const reminder = reminders.find(r => r.id === id);
+      if (!reminder) return;
+      
+      // Update in backend
+      if (reminder._id) {
+        await reminderApi.toggleReminderStatus(reminder._id, !reminder.enabled);
+      }
+      
+      // Update in local state
+      setReminders(prev => 
+        prev.map(reminder => 
+          reminder.id === id ? { ...reminder, enabled: !reminder.enabled } : reminder
+        )
+      );
+      
+      // Get the reminder that was toggled
+      const status = reminder.enabled ? 'disabled' : 'enabled';
+      
+      toast({
+        description: `Reminder for ${reminder.medicationName} ${status}`,
+        className: status === 'enabled' ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
+      });
+    } catch (error) {
+      console.error("Failed to toggle reminder status:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update reminder status",
+        variant: "destructive",
+      });
+    }
   };
   
   // Add function to handle reminder deletion
-  const handleDeleteReminder = () => {
+  const handleDeleteReminder = async () => {
     if (reminderToDelete === null) return;
     
-    const reminderName = reminders.find(r => r.id === reminderToDelete)?.medicationName;
-    
-    setReminders(prev => prev.filter(reminder => reminder.id !== reminderToDelete));
-    setReminderToDelete(null);
-    
-    toast({
-      description: `Reminder for ${reminderName} deleted`,
-      className: "bg-destructive text-destructive-foreground",
-    });
+    try {
+      const reminderToRemove = reminders.find(r => r.id === reminderToDelete);
+      if (!reminderToRemove) return;
+      
+      // Delete from backend
+      if (reminderToRemove._id) {
+        await reminderApi.deleteReminder(reminderToRemove._id);
+      }
+      
+      // Remove from local state
+      setReminders(prev => prev.filter(reminder => reminder.id !== reminderToDelete));
+      setReminderToDelete(null);
+      
+      toast({
+        description: `Reminder for ${reminderToRemove.medicationName} deleted`,
+        className: "bg-destructive text-destructive-foreground",
+      });
+    } catch (error) {
+      console.error("Failed to delete reminder:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete reminder",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Toggle WhatsApp notifications
+  const toggleWhatsApp = async (id: number, enabled: boolean) => {
+    try {
+      const reminder = reminders.find(r => r.id === id);
+      if (!reminder) return;
+      
+      // Don't allow enabling WhatsApp without a phone number
+      if (enabled && !reminder.phoneNumber) {
+        toast({
+          title: "Error",
+          description: "Please add a phone number first",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      // Update in backend
+      if (reminder._id) {
+        await reminderApi.enableWhatsApp(
+          reminder._id, 
+          reminder.phoneNumber || "", 
+          enabled
+        );
+      }
+      
+      // Update in local state
+      setReminders(prev => 
+        prev.map(r => 
+          r.id === id ? { ...r, whatsappEnabled: enabled } : r
+        )
+      );
+      
+      toast({
+        description: `WhatsApp notifications ${enabled ? 'enabled' : 'disabled'} for ${reminder.medicationName}`,
+        className: enabled ? "bg-medical-teal text-white" : "bg-slate-700 text-white",
+      });
+    } catch (error) {
+      console.error("Failed to toggle WhatsApp status:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update WhatsApp notification settings",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -411,66 +571,88 @@ const Reminders = () => {
           </TabsList>
           
           <TabsContent value={activeTab} className="space-y-6">
-            {filteredReminders.map((reminder, index) => (
-              <GsapReveal key={reminder.id} animation="slide" delay={0.1 * index}>
-                <MediCard neumorphic className="p-5">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="flex items-center">
-                      <div className="w-14 h-14 rounded-full bg-medical-teal/20 flex items-center justify-center mr-4">
-                        <AlarmClock className="w-7 h-7 text-medical-teal" />
-                      </div>
-                      <div>
-                        <h3 className="text-xl font-semibold mb-1">{reminder.medicationName}</h3>
-                        <div className="flex flex-wrap items-center text-base text-muted-foreground">
-                          <div className="flex items-center mr-3">
-                            <Clock className="w-4 h-4 mr-2" />
-                            <span className="font-medium">{reminder.time}</span>
+            {isLoading ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 border-4 border-medical-teal border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                <p className="text-muted-foreground">Loading your reminders...</p>
+              </div>
+            ) : (
+              <>
+                {filteredReminders.map((reminder, index) => (
+                  <GsapReveal key={reminder.id} animation="slide" delay={0.1 * index}>
+                    <MediCard neumorphic className="p-5">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="flex items-center">
+                          <div className="w-14 h-14 rounded-full bg-medical-teal/20 flex items-center justify-center mr-4">
+                            <AlarmClock className="w-7 h-7 text-medical-teal" />
                           </div>
-                          <span className="mx-1 hidden md:inline">•</span>
-                          <div className="mt-1 md:mt-0">
-                            <span>{reminder.days.length === 7 ? "Every day" : reminder.days.join(", ")}</span>
+                          <div>
+                            <h3 className="text-xl font-semibold mb-1">{reminder.medicationName}</h3>
+                            <div className="flex flex-wrap items-center text-base text-muted-foreground">
+                              <div className="flex items-center mr-3">
+                                <Clock className="w-4 h-4 mr-2" />
+                                <span className="font-medium">{reminder.time}</span>
+                              </div>
+                              <span className="mx-1 hidden md:inline">•</span>
+                              <div className="mt-1 md:mt-0">
+                                <span>{reminder.days.length === 7 ? "Every day" : reminder.days.join(", ")}</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
+                        
+                        <div className="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 mt-3 md:mt-0 pt-3 md:pt-0 border-t md:border-0">
+                          <div className="flex items-center">
+                            <span className="mr-2 text-sm font-medium text-muted-foreground">
+                              {reminder.enabled ? "Active" : "Inactive"}
+                            </span>
+                            <Switch 
+                              checked={reminder.enabled} 
+                              onCheckedChange={() => toggleReminderStatus(reminder.id)}
+                              className="scale-125 data-[state=checked]:bg-medical-teal"
+                            />
+                          </div>
+                          
+                          {/* WhatsApp toggle button */}
+                          <div className="flex items-center">
+                            <span className="mr-2 text-sm font-medium text-muted-foreground flex items-center">
+                              <PhoneOutgoing className="w-4 h-4 mr-1" />
+                              <span className="hidden sm:inline">WhatsApp</span>
+                            </span>
+                            <Switch 
+                              checked={reminder.whatsappEnabled || false} 
+                              onCheckedChange={(checked) => toggleWhatsApp(reminder.id, checked)}
+                              className="scale-125 data-[state=checked]:bg-green-500"
+                            />
+                          </div>
+                          
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-10 px-3 border-destructive text-destructive hover:bg-destructive/10"
+                            onClick={() => setReminderToDelete(reminder.id)}
+                          >
+                            <Trash2 className="h-5 w-5 mr-1" />
+                            <span>Delete</span>
+                          </Button>
+                        </div>
                       </div>
+                    </MediCard>
+                  </GsapReveal>
+                ))}
+                
+                {filteredReminders.length === 0 && (
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                      <Bell className="w-8 h-8 text-muted-foreground" />
                     </div>
-                    
-                    <div className="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 mt-3 md:mt-0 pt-3 md:pt-0 border-t md:border-0">
-                      <div className="flex items-center">
-                        <span className="mr-2 text-sm font-medium text-muted-foreground">
-                          {reminder.enabled ? "Active" : "Inactive"}
-                        </span>
-                        <Switch 
-                          checked={reminder.enabled} 
-                          onCheckedChange={() => toggleReminderStatus(reminder.id)}
-                          className="scale-125 data-[state=checked]:bg-medical-teal"
-                        />
-                      </div>
-                      
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10 px-3 border-destructive text-destructive hover:bg-destructive/10"
-                        onClick={() => setReminderToDelete(reminder.id)}
-                      >
-                        <Trash2 className="h-5 w-5 mr-1" />
-                        <span>Delete</span>
-                      </Button>
-                    </div>
+                    <h3 className="font-medium text-lg mb-1">No reminders</h3>
+                    <p className="text-muted-foreground">
+                      You don't have any reminders for this time period
+                    </p>
                   </div>
-                </MediCard>
-              </GsapReveal>
-            ))}
-            
-            {filteredReminders.length === 0 && (
-              <div className="text-center py-8">
-                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
-                  <Bell className="w-8 h-8 text-muted-foreground" />
-                </div>
-                <h3 className="font-medium text-lg mb-1">No reminders</h3>
-                <p className="text-muted-foreground">
-                  You don't have any reminders for this time period
-                </p>
-              </div>
+                )}
+              </>
             )}
           </TabsContent>
         </Tabs>
@@ -549,11 +731,31 @@ const Reminders = () => {
                     </div>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center">
-                        <span className="w-4 h-4 mr-2 flex items-center justify-center text-muted-foreground">📱</span>
-                        <span>SMS Alert</span>
+                        <PhoneOutgoing className="w-4 h-4 mr-2 text-muted-foreground" />
+                        <span>WhatsApp Alert</span>
                       </div>
-                      <Switch />
+                      <Switch 
+                        checked={whatsappEnabled}
+                        onCheckedChange={setWhatsappEnabled}
+                      />
                     </div>
+                    
+                    {/* Show phone number input if WhatsApp is enabled */}
+                    {whatsappEnabled && (
+                      <div className="pt-2">
+                        <label className="block text-sm font-medium mb-1">Phone Number</label>
+                        <Input 
+                          placeholder="Enter phone number (e.g., 7400135663)" 
+                          value={phoneNumber}
+                          onChange={(e) => setPhoneNumber(e.target.value)}
+                          type="tel"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Enter your number without country code (App will add +91)
+                        </p>
+                      </div>
+                    )}
+                    
                     <div className="flex items-center justify-between">
                       <div className="flex items-center">
                         <span className="w-4 h-4 mr-2 flex items-center justify-center text-muted-foreground">👤</span>
@@ -569,14 +771,20 @@ const Reminders = () => {
                     variant="outline" 
                     className="flex-1"
                     onClick={() => setShowAddReminder(false)}
+                    disabled={isLoading}
                   >
                     Cancel
                   </Button>
                   <MediButton 
                     className="flex-1 bg-medical-teal hover:bg-medical-teal/90"
                     onClick={handleSaveReminder}
+                    disabled={isLoading}
                   >
-                    <CheckCircle className="w-4 h-4 mr-2" />
+                    {isLoading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 mr-2" />
+                    )}
                     Save Reminder
                   </MediButton>
                 </div>
